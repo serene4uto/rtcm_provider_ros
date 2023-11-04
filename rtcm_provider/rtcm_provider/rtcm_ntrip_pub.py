@@ -1,12 +1,16 @@
 import rclpy
 from rclpy.node import Node
 from rtcm_msgs.msg import Rtcm
+from sensor_msgs.msg import NavSatFix
+from ament_index_python.packages import get_package_share_directory
 
+import os
 from queue import Queue
 from pyubx2 import RTCM3_PROTOCOL, protocol
 
 from pygnssutils import VERBOSITY_LOW, GNSSNTRIPClient
 
+import yaml
 
 # NTRIP caster parameters - AMEND AS REQUIRED:
 # Ideally, mountpoint should be <30 km from location.
@@ -27,15 +31,28 @@ REFLON = -2.4
 REFALT = 40
 REFSEP = 0
 
+CHECK_COORD_TIMER_PERIOD = 60  # seconds
+
 
 class RtcmNtripPub(Node):
     def __init__(self):
         super().__init__('rtcm_ntrip_pub')
 
         self.ntrip_queue = Queue()
+        
         self.rtcm_pub = self.create_publisher(Rtcm, '/rtcm', 1)
-        timer_period = 0.01  # seconds
-        self.rtcmpub_timer = self.create_timer(timer_period, self.onRtcmPubTimerCallBack)
+        self.gnss_sub = self.create_subscription(NavSatFix, '/fix', self.onGnssSubCallBack, 1)
+
+        self.check_coord_timer = self.create_timer(CHECK_COORD_TIMER_PERIOD, self.onCheckCoordTimerCallBack)
+        self.check_coord = False
+
+        self.rtcmpub_timer = self.create_timer(0.01, self.onRtcmPubTimerCallBack)
+
+        # Load RTCM base coordinates from config file
+        with open(os.path.join(get_package_share_directory(__package__), 'korea_rtcm_base.yaml')) as f:
+            self.rtcm_base_coords = yaml.load(f, Loader=yaml.FullLoader)
+        
+        # self.get_logger().info(self.rtcm_base_coords)
 
         self.get_logger().info(f"Starting NTRIP client on {NTRIP_SERVER}:{NTRIP_PORT}...\n")
         self.gnc = GNSSNTRIPClient(None, verbosity=VERBOSITY_LOW)
@@ -46,8 +63,8 @@ class RtcmNtripPub(Node):
                 flowinfo=FLOWINFO,
                 scopeid=SCOPEID,
                 mountpoint=MOUNTPOINT,
-                ntripuser=NTRIP_USER,  # pygnssutils>=1.0.12
-                ntrippassword=NTRIP_PASSWORD,  # pygnssutils>=1.0.12
+                ntripuser=NTRIP_USER, 
+                ntrippassword=NTRIP_PASSWORD,
                 reflat=REFLAT,
                 reflon=REFLON,
                 refalt=REFALT,
@@ -68,7 +85,19 @@ class RtcmNtripPub(Node):
                 rtcm_msg.header.stamp = self.get_clock().now().to_msg()
                 self.rtcm_pub.publish(rtcm_msg)
         except Exception as err:
-            self.get_logger().error(f"Something went wrong in send thread {err}")        
+            self.get_logger().error(f"Something went wrong in send thread {err}")  
+
+
+    def onCheckCoordTimerCallBack(self):
+        self.check_coord = True    
+
+
+    def onGnssSubCallBack(self, msg):
+        if self.check_coord:
+            self.check_coord = False
+
+    #     # self.gnc.set_ref_position(msg.latitude, msg.longitude, msg.altitude)  
+    #     self.
 
             
 
