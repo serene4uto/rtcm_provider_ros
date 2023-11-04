@@ -1,0 +1,6 @@
+{
+  "package_name": "rtcm_msgs",
+  "non_idl_tuples": [
+    "/workspaces/zedf9k_eval_ws/ros_gnss_ws/src/rtcm_provider_ros/rtcm_msgs:msg/Rtcm.msg"
+  ]
+}

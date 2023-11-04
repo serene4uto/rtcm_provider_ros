@@ -1,0 +1,3 @@
+[console_scripts]
+rtcm_ntrip_pub = rtcm_provider.rtcm_ntrip_pub:main
+
