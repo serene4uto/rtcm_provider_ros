@@ -16,7 +16,7 @@ if(${ROS_VERSION} EQUAL 1)
 
   add_message_files(DIRECTORY msg
     FILES
-      rtcm.msg
+      Rtcm.msg
   )
 
   generate_messages(DEPENDENCIES std_msgs)
@@ -29,7 +29,7 @@ elseif(${ROS_VERSION} EQUAL 2)
   find_package(rosidl_default_generators REQUIRED)
 
   rosidl_generate_interfaces(${PROJECT_NAME} ADD_LINTER_TESTS
-    msg/rtcm.msg
+    msg/Rtcm.msg
     DEPENDENCIES builtin_interfaces std_msgs
   )
 

@@ -1,6 +1,6 @@
 import rclpy
 from rclpy.node import Node
-from rtcm_msgs.msg import Message
+from rtcm_msgs.msg import Rtcm
 
 from queue import Queue
 from pyubx2 import RTCM3_PROTOCOL, protocol
@@ -33,39 +33,11 @@ class RtcmNtripPub(Node):
         super().__init__('rtcm_ntrip_pub')
 
         self.ntrip_queue = Queue()
-        self.rtcm_pub = self.create_publisher(Message, '/rtcm', 1)
+        self.rtcm_pub = self.create_publisher(Rtcm, '/rtcm', 1)
         timer_period = 0.01  # seconds
         self.rtcmpub_timer = self.create_timer(timer_period, self.onRtcmPubTimerCallBack)
 
         self.get_logger().info(f"Starting NTRIP client on {NTRIP_SERVER}:{NTRIP_PORT}...\n")
-        # with GNSSNTRIPClient(None, verbosity=VERBOSITY_LOW) as gnc:
-        #     self.streaming = gnc.run(
-        #             ipprot=IPPROT,
-        #             server=NTRIP_SERVER,
-        #             port=NTRIP_PORT,
-        #             flowinfo=FLOWINFO,
-        #             scopeid=SCOPEID,
-        #             mountpoint=MOUNTPOINT,
-        #             ntripuser=NTRIP_USER,  # pygnssutils>=1.0.12
-        #             ntrippassword=NTRIP_PASSWORD,  # pygnssutils>=1.0.12
-        #             reflat=REFLAT,
-        #             reflon=REFLON,
-        #             refalt=REFALT,
-        #             refsep=REFSEP,
-        #             ggamode=GGAMODE,
-        #             ggainterval=GGAINT,
-        #             output=self.ntrip_queue,
-        #         )
-
-        #     while self.streaming:  # run until user presses CTRL-C
-
-        #         rclpy.spin_once(self)
-        #         # sleep(1)
-
-
-        #     sleep(1)
-
-
         self.gnc = GNSSNTRIPClient(None, verbosity=VERBOSITY_LOW)
         self.streaming = self.gnc.run(
                 ipprot=IPPROT,
@@ -85,15 +57,13 @@ class RtcmNtripPub(Node):
                 output=self.ntrip_queue,
             )
 
-
-
     def onRtcmPubTimerCallBack(self):
         try:
             raw_data, parsed_data = self.ntrip_queue.get()
             if protocol(raw_data) == RTCM3_PROTOCOL:
                 # self.get_logger().info("Message received: {}".format(parsed_data))
-                rtcm_msg = Message()
-                rtcm_msg.message = raw_data
+                rtcm_msg = Rtcm()
+                rtcm_msg.rtcm_data = raw_data
                 rtcm_msg.header.frame_id = "rtcm_data"
                 rtcm_msg.header.stamp = self.get_clock().now().to_msg()
                 self.rtcm_pub.publish(rtcm_msg)
