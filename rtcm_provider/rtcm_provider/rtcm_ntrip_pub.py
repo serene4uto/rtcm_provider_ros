@@ -27,7 +27,8 @@ NTRIP_PASSWORD = "gnss"
 GGAMODE = 0  # use fixed reference position (0 = use live position)
 GGAINT = -1  # interval in seconds (-1 = do not send NMEA GGA sentences)
 
-CHECK_COORD_TIMER_PERIOD = 60  # seconds
+# CHECK_COORD_TIMER_PERIOD = 60  # seconds
+REBASE_CHECK_COUNT = 400 # number of rtcm messages to check if rebase is needed or not
 REBASE_DISTANCE_THRESHOLD = 30  # km
 
 def ddmmss_to_decdd(ddmmss: str) -> float:
@@ -47,31 +48,27 @@ class RtcmNtripPub(Node):
         self.rtcm_pub = self.create_publisher(Rtcm, '/rtcm', 1)
         self.gnss_sub = self.create_subscription(NavSatFix, '/fix', self.onGnssSubCallBack, 1)
 
-        self.check_coord_timer = self.create_timer(CHECK_COORD_TIMER_PERIOD, self.onCheckCoordTimerCallBack)
-        self.check_coord = False
+        self.rebase_check = False
 
         self.rtcmpub_timer = self.create_timer(0.01, self.onRtcmPubTimerCallBack)
+        self.rtcmpub_timer.cancel()
 
-
+        self.rtcm_cnt = 0
         self.current_mountpoint = None
-
-
 
         # Load RTCM base coordinates from config file
         with open(os.path.join(get_package_share_directory(__package__), 'korea_rtcm_base.yaml')) as f:
             self.rtcm_base_coords = yaml.load(f, Loader=yaml.FullLoader)
         
-        for key, value in self.rtcm_base_coords['RTCM32-Base'][0].items():
+        for key, value in self.rtcm_base_coords['RTCM32-Base'].items():
             value[0], value[1] = ddmmss_to_decdd(value[0]), ddmmss_to_decdd(value[1])
-            # value.append(-1)
-        
-        # self.get_logger().info(self.rtcm_base_coords)
 
-        self.get_logger().info(f"Starting NTRIP client on {NTRIP_SERVER}:{NTRIP_PORT}...\n")
+        
         self.gnc = GNSSNTRIPClient(None, verbosity=VERBOSITY_LOW)
         self.streaming = None
 
-    @staticmethod
+
+    # @staticmethod
     def reselect_mountpoint(self, new_coord: tuple):
         dists = {}
         for key, val in self.rtcm_base_coords['RTCM32-Base'].items():
@@ -80,8 +77,10 @@ class RtcmNtripPub(Node):
 
     def onRtcmPubTimerCallBack(self):
         try:
+            
             raw_data, parsed_data = self.ntrip_queue.get()
             if protocol(raw_data) == RTCM3_PROTOCOL:
+                self.rtcm_cnt += 1
                 # self.get_logger().info("Message received: {}".format(parsed_data))
                 rtcm_msg = Rtcm()
                 rtcm_msg.rtcm_data = raw_data
@@ -89,65 +88,96 @@ class RtcmNtripPub(Node):
                 rtcm_msg.header.stamp = self.get_clock().now().to_msg()
                 self.rtcm_pub.publish(rtcm_msg)
         except Exception as err:
-            self.get_logger().error(f"Something went wrong in send thread {err}")  
+            self.get_logger().error(f"Something went wrong in send thread {err}") 
 
-    def onCheckCoordTimerCallBack(self):
-        if self.check_coord == False:
-            self.check_coord = True    
+        # Stop publishing rtcm data after 400 messages to check if rebase is needed or not
+        if self.rtcm_cnt == REBASE_CHECK_COUNT:
+            self.rtcm_cnt = 0
+            self.rebase_check = True
+            self.rtcmpub_timer.cancel()
+
+            # Start subscribing to fix topic
+            self.gnss_sub = self.create_subscription(NavSatFix, '/fix', self.onGnssSubCallBack, 1)
+            
+            
 
     def onGnssSubCallBack(self, msg):
         # self.gnc.set_ref_position(msg.latitude, msg.longitude, msg.altitude)  
+        # self.get_logger().info(f"Current position: {msg.latitude}, {msg.longitude}, {msg.altitude}")
         rebase = False 
-        if self.current_mountpoint is None:
+        if self.current_mountpoint == None:
             # First time connect to mountpoint
             self.reselect_mountpoint(new_coord=(msg.latitude, msg.longitude))
+            self.get_logger().info(f"First time connect to mountpoint {self.current_mountpoint}")
             rebase = True
 
-        elif self.check_coord:
+        elif self.rebase_check:
             # Check if rebase is needed or not
+            self.get_logger().info(f"Checking if rebase is needed or not...")
             current_dist = haversine.haversine(self.rtcm_base_coords['RTCM32-Base'][self.current_mountpoint], (msg.latitude, msg.longitude))
             if current_dist > REBASE_DISTANCE_THRESHOLD:
                 rebase = True
                 self.reselect_mountpoint(new_coord=(msg.latitude, msg.longitude))
-                if self.streaming is not None:
-                    self.streaming.stop()
-                    self.streaming = None
-                    self.ntrip_queue.queue.clear()
-                    self.get_logger().info(f"Rebase to new mountpoint: {self.current_mountpoint}")
+
+                self.gnc.stop()
+                self.ntrip_queue.queue.clear()
+                self.get_logger().info(f"Rebase to new mountpoint: {self.current_mountpoint}")
+            else:
+                self.get_logger().info(f"Current mountpoint is still valid: {self.current_mountpoint}")
+
+                # Stop subscribing to fix topic
+                self.destroy_subscription(self.gnss_sub)
+                self.gnss_sub = None
+
+                self.rtcmpub_timer.reset()
             
-        if rebase:
-            # Try to connect to new mountpoint
-            while True:
-                try:
-                    self.get_logger().info(f"Connecting to mountpoint {self.current_mountpoint}...")
-                    self.streaming = self.gnc.run(
-                        ipprot=IPPROT,
-                        server=NTRIP_SERVER,
-                        port=NTRIP_PORT,
-                        flowinfo=FLOWINFO,
-                        scopeid=SCOPEID,
-                        mountpoint=self.current_mountpoint,
-                        ntripuser=NTRIP_USER, 
-                        ntrippassword=NTRIP_PASSWORD,
-                        ggamode=GGAMODE,
-                        ggainterval=GGAINT,
-                        output=self.ntrip_queue,
-                    )
-                    self.get_logger().info(f"Connected to mountpoint {self.current_mountpoint}")
-                    break
-                except Exception as err:
-                    self.get_logger().error(f"Something went wrong in run thread {err}")
-                    self.streaming = None
-                    self.ntrip_queue.queue.clear()
-                    continue
+
+        # Try to connect to new mountpoint
+        while rebase:
+            try:
+               # self.get_logger().info(f"Starting NTRIP client on {NTRIP_SERVER}:{NTRIP_PORT}...\n")
+                self.get_logger().info(f"Connecting to mountpoint {self.current_mountpoint}...")
+                self.streaming = self.gnc.run(
+                    ipprot=IPPROT,
+                    server=NTRIP_SERVER,
+                    port=NTRIP_PORT,
+                    flowinfo=FLOWINFO,
+                    scopeid=SCOPEID,
+                    mountpoint=self.current_mountpoint,
+                    ntripuser=NTRIP_USER, 
+                    ntrippassword=NTRIP_PASSWORD,
+                    ggamode=GGAMODE,
+                    ggainterval=GGAINT,
+                    output=self.ntrip_queue,
+                )
+                self.get_logger().info(f"Connected to mountpoint {self.current_mountpoint}")
+
+                # Stop subscribing to fix topic
+                self.destroy_subscription(self.gnss_sub)
+                self.gnss_sub = None
+
+                # Start timer to publishing rtcm data
+                self.rtcmpub_timer.reset() 
+
+                rebase = False
+                
+            except Exception as err:
+                self.get_logger().error(f"Something went wrong in run thread {err}")
+                self.streaming = None
+                self.ntrip_queue.queue.clear()
+                continue
 
 
-            self.check_coord = False
+            self.rebase_check = False
             
 
 def main(args=None):
     rclpy.init(args=args)
     rtcm_ntrip_pub = RtcmNtripPub()
+    # executor = rclpy.executors.MultiThreadedExecutor()
+    # executor.add_node(rtcm_ntrip_pub)
+    # executor.spin()
+    # executor.shutdown()
     rclpy.spin(rtcm_ntrip_pub)
     rtcm_ntrip_pub.gnc.stop()
     rtcm_ntrip_pub.destroy_node()
