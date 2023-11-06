@@ -45,12 +45,12 @@ class RtcmNtripPub(Node):
 
         self.ntrip_queue = Queue()
 
-        self.rtcm_pub = self.create_publisher(Rtcm, '/rtcm', 1)
+        self.rtcm_pub = self.create_publisher(Rtcm, '/rtcm', 10)
         self.gnss_sub = self.create_subscription(NavSatFix, '/fix', self.onGnssSubCallBack, 1)
 
         self.rebase_check = False
 
-        self.rtcmpub_timer = self.create_timer(0.01, self.onRtcmPubTimerCallBack)
+        self.rtcmpub_timer = self.create_timer(0.1, self.onRtcmPubTimerCallBack)
         self.rtcmpub_timer.cancel()
 
         self.rtcm_cnt = 0
